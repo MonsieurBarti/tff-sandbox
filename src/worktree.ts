@@ -75,7 +75,31 @@ export async function createWorktree(opts: CreateWorktreeOptions): Promise<Workt
 	}
 	const worktreePath = path.join(worktreesDirReal, worktreeName);
 
-	// 5. (No-collision-resolution path; collision logic lands in T03/T04.)
+	// 4 + 5. List existing worktrees, classify collisions.
+	const listed = await listWorktrees(repoPath);
+	const collision = findCollision(listed, branch, worktreePath, worktreesDirReal);
+
+	if (collision.kind === "managed-reuse") {
+		const { stdout: status } = await execFileAsync("git", ["status", "--porcelain"], {
+			cwd: collision.path,
+		});
+		if (status.trim().length > 0) {
+			console.warn(`tff-sandbox: reusing worktree at ${collision.path} with uncommitted changes`);
+		}
+		if (baseBranch !== undefined) {
+			console.warn("tff-sandbox: baseBranch is ignored when reusing an existing worktree");
+		}
+		return makeHandle(collision.path, branch, repoPath, true);
+	}
+
+	if (collision.kind === "external") {
+		throw new WorktreeError(
+			"BRANCH_IN_USE_EXTERNAL",
+			`Branch '${branch}' is already checked out at '${collision.path}'. Use a different branch name, or remove that worktree first.`,
+		);
+	}
+
+	// kind === "none" — proceed to add.
 	let branchRefExists = false;
 	try {
 		await execFileAsync("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], {
@@ -224,4 +248,44 @@ export function parseWorktreeList(stdout: string): WorktreeEntry[] {
 		}
 	}
 	return entries;
+}
+
+type CollisionResult =
+	| { kind: "none" }
+	| { kind: "managed-reuse"; path: string }
+	| { kind: "external"; path: string };
+
+async function listWorktrees(repoPath: string): Promise<WorktreeEntry[]> {
+	try {
+		const { stdout } = await execFileAsync("git", ["worktree", "list", "--porcelain"], {
+			cwd: repoPath,
+		});
+		return parseWorktreeList(stdout);
+	} catch (err) {
+		const stderr = (err as { stderr?: string }).stderr;
+		throw new WorktreeError(
+			"GIT_FAILED",
+			stderr && stderr.length > 0 ? stderr : (err as Error).message,
+			err,
+		);
+	}
+}
+
+function findCollision(
+	entries: WorktreeEntry[],
+	branch: string,
+	worktreePath: string,
+	worktreesDirReal: string,
+): CollisionResult {
+	for (const entry of entries) {
+		if (entry.branch === branch) {
+			const inside =
+				entry.path === worktreePath || entry.path.startsWith(`${worktreesDirReal}${path.sep}`);
+			if (inside) {
+				return { kind: "managed-reuse", path: entry.path };
+			}
+			return { kind: "external", path: entry.path };
+		}
+	}
+	return { kind: "none" };
 }

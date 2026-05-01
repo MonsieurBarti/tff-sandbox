@@ -232,6 +232,110 @@ describe("createWorktree", () => {
 			expect(head).toBe(preTip.trim());
 		});
 	});
+
+	describe("collisions", () => {
+		it("reuses an existing managed worktree (clean) with reused=true and no warn", async () => {
+			const first = await createWorktree({
+				repoPath: repo.repoPath,
+				branchStrategy: { type: "branch", branch: "agent/foo" },
+			});
+			const second = await createWorktree({
+				repoPath: repo.repoPath,
+				branchStrategy: { type: "branch", branch: "agent/foo" },
+			});
+			expect(second.path).toBe(first.path);
+			expect(second.reused).toBe(true);
+			expect(second.branch).toBe("agent/foo");
+			expect(warnSpy).not.toHaveBeenCalled();
+		});
+
+		it("warns once on dirty managed reuse", async () => {
+			const first = await createWorktree({
+				repoPath: repo.repoPath,
+				branchStrategy: { type: "branch", branch: "agent/foo" },
+			});
+			const fs = await import("node:fs/promises");
+			await fs.writeFile(path.join(first.path, "dirty.txt"), "x");
+			const second = await createWorktree({
+				repoPath: repo.repoPath,
+				branchStrategy: { type: "branch", branch: "agent/foo" },
+			});
+			expect(second.reused).toBe(true);
+			expect(warnSpy).toHaveBeenCalledTimes(1);
+			expect(String(warnSpy.mock.calls[0]?.[0] ?? "")).toMatch(/uncommitted|dirty/i);
+		});
+
+		it("emits a separate warn when baseBranch is supplied alongside reuse", async () => {
+			await createWorktree({
+				repoPath: repo.repoPath,
+				branchStrategy: { type: "branch", branch: "agent/foo" },
+			});
+			const second = await createWorktree({
+				repoPath: repo.repoPath,
+				branchStrategy: {
+					type: "branch",
+					branch: "agent/foo",
+					baseBranch: "HEAD",
+				},
+			});
+			expect(second.reused).toBe(true);
+			expect(warnSpy).toHaveBeenCalledTimes(1);
+			expect(String(warnSpy.mock.calls[0]?.[0] ?? "")).toMatch(/baseBranch/);
+		});
+
+		it("emits both warns when reuse is dirty and baseBranch supplied", async () => {
+			const first = await createWorktree({
+				repoPath: repo.repoPath,
+				branchStrategy: { type: "branch", branch: "agent/foo" },
+			});
+			const fs = await import("node:fs/promises");
+			await fs.writeFile(path.join(first.path, "dirty.txt"), "x");
+			const second = await createWorktree({
+				repoPath: repo.repoPath,
+				branchStrategy: {
+					type: "branch",
+					branch: "agent/foo",
+					baseBranch: "HEAD",
+				},
+			});
+			expect(second.reused).toBe(true);
+			expect(warnSpy).toHaveBeenCalledTimes(2);
+		});
+
+		it("throws BRANCH_IN_USE_EXTERNAL when branch is checked out in main worktree", async () => {
+			await execFileAsync("git", ["checkout", "-b", "agent/foo"], { cwd: repo.repoPath });
+			await expect(
+				createWorktree({
+					repoPath: repo.repoPath,
+					branchStrategy: { type: "branch", branch: "agent/foo" },
+				}),
+			).rejects.toMatchObject({ code: "BRANCH_IN_USE_EXTERNAL" });
+		});
+
+		it("throws BRANCH_IN_USE_EXTERNAL when branch is checked out in an external worktree", async () => {
+			await execFileAsync("git", ["branch", "agent/foo"], { cwd: repo.repoPath });
+			const ext = mkdtempSync(path.join(tmpdir(), "tff-external-"));
+			// `git worktree add` requires the target dir not pre-exist; use a child path.
+			const extWt = path.join(ext, "wt");
+			try {
+				await execFileAsync("git", ["worktree", "add", extWt, "agent/foo"], {
+					cwd: repo.repoPath,
+				});
+				const err = await createWorktree({
+					repoPath: repo.repoPath,
+					branchStrategy: { type: "branch", branch: "agent/foo" },
+				}).catch((e) => e);
+				expect(err).toBeInstanceOf(WorktreeError);
+				expect(err.code).toBe("BRANCH_IN_USE_EXTERNAL");
+				expect(String(err?.message ?? "")).toMatch(/[/\\]wt\b/);
+			} finally {
+				await execFileAsync("git", ["worktree", "remove", "--force", extWt], {
+					cwd: repo.repoPath,
+				}).catch(() => {});
+				rmSync(ext, { recursive: true, force: true });
+			}
+		});
+	});
 });
 
 describe("WorktreeHandle", () => {

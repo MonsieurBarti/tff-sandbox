@@ -374,16 +374,17 @@ export function docker(opts: DockerOptions = {}): SandboxProvider {
 							child.on("error", (err) => {
 								reject(new SandboxError("EXEC_FAILED", getErrorMessage(err), err));
 							});
-							child.on("close", (code) => {
+							child.on("close", (code, signal) => {
 								const stderr = stderrChunks.join("");
 								if (code !== 0 && /No such container|is not running/i.test(stderr)) {
 									reject(new SandboxError("EXEC_FAILED", stderr));
 									return;
 								}
+								const exitCode = code ?? (signal !== null ? 1 : 0);
 								resolve({
 									stdout: stdoutChunks.join(""),
 									stderr,
-									exitCode: code ?? 0,
+									exitCode,
 								});
 							});
 						},
@@ -391,12 +392,12 @@ export function docker(opts: DockerOptions = {}): SandboxProvider {
 				},
 				async dispose() {
 					if (disposed) return;
-					disposed = true;
 					try {
 						await execFileAsync("docker", ["rm", "-f", generatedName]);
 					} catch (err) {
 						const stderr = getStderr(err) ?? "";
 						if (/No such container|Cannot connect to the Docker daemon/i.test(stderr)) {
+							disposed = true;
 							process.off("exit", onExit);
 							process.off("SIGINT", onSignal);
 							process.off("SIGTERM", onSignal);
@@ -408,6 +409,7 @@ export function docker(opts: DockerOptions = {}): SandboxProvider {
 							err,
 						);
 					}
+					disposed = true;
 					process.off("exit", onExit);
 					process.off("SIGINT", onSignal);
 					process.off("SIGTERM", onSignal);

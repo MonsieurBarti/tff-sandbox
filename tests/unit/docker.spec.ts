@@ -304,7 +304,8 @@ describe("container lifecycle", () => {
 				await sandbox.dispose();
 			}
 		} finally {
-			if (prev === undefined) process.env.ANTHROPIC_API_KEY = undefined;
+			// biome-ignore lint/performance/noDelete: assigning undefined stringifies to "undefined"; delete is correct here
+			if (prev === undefined) delete process.env.ANTHROPIC_API_KEY;
 			else process.env.ANTHROPIC_API_KEY = prev;
 		}
 	});
@@ -328,7 +329,8 @@ describe("container lifecycle", () => {
 				await sandbox.dispose();
 			}
 		} finally {
-			if (prev === undefined) process.env.ANTHROPIC_API_KEY = undefined;
+			// biome-ignore lint/performance/noDelete: assigning undefined stringifies to "undefined"; delete is correct here
+			if (prev === undefined) delete process.env.ANTHROPIC_API_KEY;
 			else process.env.ANTHROPIC_API_KEY = prev;
 		}
 	});

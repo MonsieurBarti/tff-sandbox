@@ -530,3 +530,11 @@ describe("WorktreeHandle", () => {
 		expect(handle.path).toBe(realpathSync(handle.path));
 	});
 });
+
+describe("public surface", () => {
+	it("re-exports createWorktree and WorktreeError from src/index.ts", async () => {
+		const mod = await import("../../src/index.js");
+		expect(typeof mod.createWorktree).toBe("function");
+		expect(typeof mod.WorktreeError).toBe("function");
+	});
+});

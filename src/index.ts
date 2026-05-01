@@ -34,3 +34,8 @@ export async function run(options: RunOptions): Promise<RunResult> {
 		`@the-forge-flow/sandbox: run() not implemented (got agent=${options.agent}, sandbox=${options.sandbox})`,
 	);
 }
+
+export { WorktreeError } from "./errors.js";
+export type { WorktreeErrorCode } from "./errors.js";
+export { createWorktree } from "./worktree.js";
+export type { CreateWorktreeOptions, WorktreeHandle } from "./worktree.js";

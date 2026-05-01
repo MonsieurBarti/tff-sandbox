@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { SandboxError } from "../../src/errors.js";
 
 const dockerfilePath = fileURLToPath(
 	new URL("../../runtime/claude-code/Dockerfile", import.meta.url),
@@ -42,5 +43,30 @@ describe("bundled Dockerfile", () => {
 		);
 		expect(Array.isArray(pkg.files)).toBe(true);
 		expect(pkg.files).toContain("runtime");
+	});
+});
+
+describe("SandboxError", () => {
+	it("carries code, message, optional cause and name === 'SandboxError'", () => {
+		const cause = new Error("boom");
+		const err = new SandboxError("DOCKER_UNAVAILABLE", "daemon down", cause);
+		expect(err).toBeInstanceOf(Error);
+		expect(err.name).toBe("SandboxError");
+		expect(err.code).toBe("DOCKER_UNAVAILABLE");
+		expect(err.message).toBe("daemon down");
+		expect(err.cause).toBe(cause);
+	});
+
+	it("omits cause when none provided", () => {
+		const err = new SandboxError("INVALID_OPTIONS", "bad input");
+		expect(err.cause).toBeUndefined();
+	});
+
+	it("does not collide with WorktreeError", async () => {
+		const { WorktreeError } = await import("../../src/errors.js");
+		const wte = new WorktreeError("REPO_NOT_FOUND", "x");
+		const sbe = new SandboxError("DOCKER_UNAVAILABLE", "y");
+		expect(wte).not.toBeInstanceOf(SandboxError);
+		expect(sbe).not.toBeInstanceOf(WorktreeError);
 	});
 });

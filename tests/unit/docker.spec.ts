@@ -70,3 +70,27 @@ describe("SandboxError", () => {
 		expect(sbe).not.toBeInstanceOf(WorktreeError);
 	});
 });
+
+describe("sandbox-provider interfaces (compile-time)", () => {
+	it("module loads at runtime", async () => {
+		const mod = await import("../../src/sandbox-provider.js");
+		expect(typeof mod).toBe("object");
+	});
+
+	it("a structural conformance object satisfies SandboxHandle", () => {
+		const handle: import("../../src/sandbox-provider.js").SandboxHandle = {
+			containerName: "tff-sandbox-00000000-0000-0000-0000-000000000000",
+			workspacePath: "/home/tff/workspace",
+			async exec() {
+				return { stdout: "", stderr: "", exitCode: 0 };
+			},
+			async dispose() {
+				return;
+			},
+			async [Symbol.asyncDispose]() {
+				return;
+			},
+		};
+		expect(handle.workspacePath).toBe("/home/tff/workspace");
+	});
+});

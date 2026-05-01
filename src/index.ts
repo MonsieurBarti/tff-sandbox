@@ -1,4 +1,6 @@
+import { runClaudeCode } from "./agent/claude-code.js";
 import type { SandboxProvider } from "./sandbox-provider.js";
+import { createWorktree } from "./worktree.js";
 
 export type AgentKind = "claude-code";
 
@@ -18,6 +20,7 @@ export type RunOptions = {
 	sandbox: SandboxProvider;
 	prompt: string;
 	branchStrategy: BranchStrategy;
+	repoPath: string;
 };
 
 export type Commit = {
@@ -30,15 +33,22 @@ export type RunResult = {
 	exitCode: number;
 };
 
-export async function run(options: RunOptions): Promise<RunResult> {
-	throw new Error(
-		`@the-forge-flow/sandbox: run() not implemented (got agent=${options.agent}, sandbox=${options.sandbox.name})`,
-	);
+export async function run(opts: RunOptions): Promise<RunResult> {
+	await using wt = await createWorktree({
+		repoPath: opts.repoPath,
+		branchStrategy: opts.branchStrategy,
+	});
+	const headBefore = await wt.getHead();
+	await using sandbox = await opts.sandbox.start({ worktreePath: wt.path });
+	const agent = await runClaudeCode(sandbox, opts.prompt, { hostWorktreePath: wt.path });
+	const newest = await wt.listCommitsSince(headBefore);
+	const commits = newest.slice().reverse();
+	return { branch: wt.branch, commits, exitCode: agent.exitCode };
 }
 
 export { WorktreeError } from "./errors.js";
 export type { WorktreeErrorCode } from "./errors.js";
-export { createWorktree } from "./worktree.js";
+export { createWorktree };
 export type { CreateWorktreeOptions, WorktreeHandle } from "./worktree.js";
 
 export { SandboxError } from "./errors.js";
@@ -47,7 +57,7 @@ export { AgentError } from "./errors.js";
 export type { AgentErrorCode } from "./errors.js";
 export { docker } from "./docker.js";
 export type { DockerOptions } from "./docker.js";
-export { runClaudeCode } from "./agent/claude-code.js";
+export { runClaudeCode };
 export type { AgentResult, RunClaudeCodeOptions } from "./agent/claude-code.js";
 export type {
 	ExecOptions,

@@ -563,6 +563,23 @@ describe("WorktreeHandle", () => {
 		});
 		expect(handle.path).toBe(realpathSync(handle.path));
 	});
+
+	it("supports await using (Symbol.asyncDispose)", async () => {
+		let wtPath: string;
+		{
+			await using wt = await createWorktree({
+				repoPath: repo.repoPath,
+				branchStrategy: { type: "branch", branch: "agent/dispose-test" },
+			});
+			wtPath = wt.path;
+			expect(wt.path).toMatch(/agent-dispose-test$/);
+		}
+		const { stdout } = await execFileAsync("git", ["worktree", "list", "--porcelain"], {
+			cwd: repo.repoPath,
+			env: cleanGitEnv(),
+		});
+		expect(stdout).not.toContain(wtPath);
+	});
 });
 
 describe("public surface", () => {

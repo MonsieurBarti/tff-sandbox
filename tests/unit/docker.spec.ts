@@ -232,6 +232,7 @@ describe("public surface", () => {
 			sandbox: mod.docker(),
 			prompt: "hi",
 			branchStrategy: { type: "branch", branch: "agent/x" },
+			repoPath: "/tmp/x",
 		};
 		expect(runOpts.sandbox.name).toBe("docker");
 	});

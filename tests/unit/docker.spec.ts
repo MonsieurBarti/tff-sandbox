@@ -621,14 +621,13 @@ describe("mounts", () => {
 		}
 	});
 
-	it("MOUNT ORDER (real-Docker): docker inspect Mounts shows ro parent listed before rw child", async () => {
+	it("MOUNT LAYERING (real-Docker): docker inspect Mounts shows both ro parent and rw child", async () => {
 		if (skipAll) return;
-		// Pin the load-bearing MOUNT ORDER invariant via a real-container
-		// inspection rather than spy-on-execFile (the production code uses a
-		// destructured `import { execFile } ...` so vi.spyOn on the module
-		// would not intercept the binding). Docker's `docker inspect` returns
-		// the Mounts array in the order they were declared on the CLI; assert
-		// the ro parent (CLAUDE config) precedes the rw projects sub-mount.
+		// Verify both mounts are declared on the container. The actual ro/rw
+		// behavioral invariant is covered by AC#11 (write to ~/.claude fails)
+		// and AC#12 (writes to ~/.claude/projects round-trip). The Docker
+		// daemon does not guarantee a stable order in `inspect .Mounts`, so we
+		// assert presence and modes only.
 		const cfg = await makeClaudeDir();
 		const sandbox = await docker({ claudeConfigPath: cfg.dir }).start({
 			worktreePath: repo.dir,
@@ -642,12 +641,12 @@ describe("mounts", () => {
 			]);
 			const mounts: ReadonlyArray<{ Source: string; Destination: string; Mode: string }> =
 				JSON.parse(stdout);
-			const roParentIdx = mounts.findIndex(
+			const roParent = mounts.find(
 				(m) => m.Destination === "/home/tff/.claude" && m.Mode.includes("ro"),
 			);
-			const rwChildIdx = mounts.findIndex((m) => m.Destination === "/home/tff/.claude/projects");
-			expect(roParentIdx).toBeGreaterThanOrEqual(0);
-			expect(rwChildIdx).toBeGreaterThan(roParentIdx);
+			const rwChild = mounts.find((m) => m.Destination === "/home/tff/.claude/projects");
+			expect(roParent).toBeDefined();
+			expect(rwChild).toBeDefined();
 		} finally {
 			await sandbox.dispose();
 			cfg.cleanup();

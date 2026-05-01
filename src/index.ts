@@ -4,6 +4,12 @@ export type SandboxKind = "docker";
 export type BranchStrategy = {
 	type: "branch";
 	branch: string;
+	/**
+	 * Git ref used as the starting point when the branch does not yet exist.
+	 * Default "HEAD". Ignored when the branch already exists (whether reused
+	 * from a managed worktree or attached to an existing ref).
+	 */
+	baseBranch?: string;
 };
 
 export type RunOptions = {

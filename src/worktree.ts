@@ -26,6 +26,7 @@ export interface WorktreeHandle {
 	getHead(): Promise<string>;
 	listCommitsSince(sha: string): Promise<Commit[]>;
 	dispose(): Promise<void>;
+	[Symbol.asyncDispose](): Promise<void>;
 }
 
 export type WorktreeEntry = {
@@ -228,6 +229,9 @@ function makeHandle(
 					err,
 				);
 			}
+		},
+		async [Symbol.asyncDispose](): Promise<void> {
+			await this.dispose();
 		},
 	};
 }

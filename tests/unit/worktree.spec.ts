@@ -401,6 +401,28 @@ describe("createWorktree", () => {
 			expect(handle.branch).toBe("agent/foo");
 		});
 	});
+
+	describe("git failures", () => {
+		it("wraps an unexpected git worktree add failure as GIT_FAILED with cause + stderr", async () => {
+			// Force a deterministic GIT_FAILED by pre-seeding the worktree path
+			// with a non-empty directory. `git worktree add` then fails (exit 128)
+			// with stderr "fatal: '<path>' already exists".
+			const worktreesDir = path.join(realpathSync(repo.repoPath), ".tff-sandbox", "worktrees");
+			mkdirSync(path.join(worktreesDir, "agent-foo"), { recursive: true });
+			const fs = await import("node:fs/promises");
+			await fs.writeFile(path.join(worktreesDir, "agent-foo", "blocker.txt"), "x");
+
+			const err = await createWorktree({
+				repoPath: repo.repoPath,
+				branchStrategy: { type: "branch", branch: "agent/foo" },
+			}).catch((e) => e);
+
+			expect(err).toBeInstanceOf(WorktreeError);
+			expect(err.code).toBe("GIT_FAILED");
+			expect(err.cause).toBeDefined();
+			expect(String(err.message)).toMatch(/already exists|fatal/i);
+		});
+	});
 });
 
 describe("WorktreeHandle", () => {

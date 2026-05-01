@@ -1,0 +1,62 @@
+{
+	"repo": {
+		"visibility": "public",
+		"has_issues": true,
+		"has_wiki": true,
+		"has_projects": true,
+		"has_discussions": false,
+		"allow_squash_merge": true,
+		"allow_merge_commit": true,
+		"allow_rebase_merge": true,
+		"allow_auto_merge": false,
+		"delete_branch_on_merge": true,
+		"default_branch": "main"
+	},
+	"topics": [],
+	"protection": {
+		"url": "https://api.github.com/repos/MonsieurBarti/The-Forge-Flow-CC/branches/main/protection",
+		"required_status_checks": {
+			"url": "https://api.github.com/repos/MonsieurBarti/The-Forge-Flow-CC/branches/main/protection/required_status_checks",
+			"strict": false,
+			"contexts": [],
+			"contexts_url": "https://api.github.com/repos/MonsieurBarti/The-Forge-Flow-CC/branches/main/protection/required_status_checks/contexts",
+			"checks": []
+		},
+		"required_pull_request_reviews": {
+			"url": "https://api.github.com/repos/MonsieurBarti/The-Forge-Flow-CC/branches/main/protection/required_pull_request_reviews",
+			"dismiss_stale_reviews": false,
+			"require_code_owner_reviews": false,
+			"require_last_push_approval": false,
+			"required_approving_review_count": 1
+		},
+		"required_signatures": {
+			"url": "https://api.github.com/repos/MonsieurBarti/The-Forge-Flow-CC/branches/main/protection/required_signatures",
+			"enabled": false
+		},
+		"enforce_admins": {
+			"url": "https://api.github.com/repos/MonsieurBarti/The-Forge-Flow-CC/branches/main/protection/enforce_admins",
+			"enabled": false
+		},
+		"required_linear_history": {
+			"enabled": false
+		},
+		"allow_force_pushes": {
+			"enabled": false
+		},
+		"allow_deletions": {
+			"enabled": false
+		},
+		"block_creations": {
+			"enabled": false
+		},
+		"required_conversation_resolution": {
+			"enabled": false
+		},
+		"lock_branch": {
+			"enabled": false
+		},
+		"allow_fork_syncing": {
+			"enabled": false
+		}
+	}
+}

@@ -325,20 +325,69 @@ export function docker(opts: DockerOptions = {}): SandboxProvider {
 			const handle: SandboxHandle = {
 				containerName: generatedName,
 				workspacePath: "/home/tff/workspace",
-				async exec(command, _execOpts) {
-					try {
-						const { stdout, stderr } = await execFileAsync("docker", [
-							"exec",
-							generatedName,
-							"sh",
-							"-c",
-							command,
-						]);
-						return { stdout, stderr, exitCode: 0 };
-					} catch (e) {
-						const stderr = getStderr(e) ?? "";
-						return { stdout: "", stderr, exitCode: 1 };
-					}
+				async exec(command, execOpts) {
+					const args: string[] = ["exec"];
+					if (execOpts?.stdin !== undefined) args.push("-i");
+					if (execOpts?.cwd !== undefined) args.push("-w", execOpts.cwd);
+					args.push(generatedName, "sh", "-c", command);
+
+					return await new Promise<import("./sandbox-provider.js").ExecResult>(
+						(resolve, reject) => {
+							const child = spawn("docker", args, {
+								stdio: [execOpts?.stdin !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
+							});
+							const stdoutChunks: string[] = [];
+							const stderrChunks: string[] = [];
+							let lineBuf = "";
+
+							if (execOpts?.stdin !== undefined && child.stdin !== null) {
+								child.stdin.write(execOpts.stdin);
+								child.stdin.end();
+							}
+
+							if (child.stdout === null || child.stderr === null) {
+								reject(new SandboxError("EXEC_FAILED", "spawn stdio streams unavailable"));
+								return;
+							}
+
+							child.stdout.on("data", (chunk: Buffer) => {
+								const str = chunk.toString();
+								stdoutChunks.push(str);
+								if (execOpts?.onLine !== undefined) {
+									lineBuf += str;
+									let idx = lineBuf.indexOf("\n");
+									while (idx >= 0) {
+										execOpts.onLine(lineBuf.slice(0, idx));
+										lineBuf = lineBuf.slice(idx + 1);
+										idx = lineBuf.indexOf("\n");
+									}
+								}
+							});
+							child.stdout.on("end", () => {
+								if (execOpts?.onLine !== undefined && lineBuf.length > 0) {
+									execOpts.onLine(lineBuf);
+								}
+							});
+							child.stderr.on("data", (chunk: Buffer) => {
+								stderrChunks.push(chunk.toString());
+							});
+							child.on("error", (err) => {
+								reject(new SandboxError("EXEC_FAILED", getErrorMessage(err), err));
+							});
+							child.on("close", (code) => {
+								const stderr = stderrChunks.join("");
+								if (code !== 0 && /No such container|is not running/i.test(stderr)) {
+									reject(new SandboxError("EXEC_FAILED", stderr));
+									return;
+								}
+								resolve({
+									stdout: stdoutChunks.join(""),
+									stderr,
+									exitCode: code ?? 0,
+								});
+							});
+						},
+					);
 				},
 				async dispose() {
 					if (disposed) return;

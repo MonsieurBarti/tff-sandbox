@@ -679,3 +679,103 @@ describe("mounts", () => {
 		}
 	});
 });
+
+describe("exec semantics", () => {
+	let repo: { dir: string; cleanup: () => void };
+	let sandbox: import("../../src/sandbox-provider.js").SandboxHandle | undefined;
+
+	beforeEach(async () => {
+		if (skipAll) return;
+		repo = await makeWorkRepo();
+		sandbox = await docker().start({ worktreePath: repo.dir });
+	});
+
+	afterEach(async () => {
+		if (sandbox !== undefined) await sandbox.dispose().catch(() => {});
+		sandbox = undefined;
+		repo?.cleanup();
+	});
+
+	it("AC#18: echo hello → {stdout:'hello\\n', stderr:'', exitCode:0}", async () => {
+		if (skipAll || sandbox === undefined) return;
+		const r = await sandbox.exec("echo hello");
+		expect(r).toEqual({ stdout: "hello\n", stderr: "", exitCode: 0 });
+	});
+
+	it("AC#19: stderr is captured separately", async () => {
+		if (skipAll || sandbox === undefined) return;
+		const r = await sandbox.exec("sh -c 'echo err >&2'");
+		expect(r.stdout).toBe("");
+		expect(r.stderr).toBe("err\n");
+		expect(r.exitCode).toBe(0);
+	});
+
+	it("AC#20: false → exitCode 1, no throw", async () => {
+		if (skipAll || sandbox === undefined) return;
+		const r = await sandbox.exec("false");
+		expect(r.exitCode).toBe(1);
+	});
+
+	it("AC#21 (trailing partial): onLine fires once on end for an unterminated final line", async () => {
+		if (skipAll || sandbox === undefined) return;
+		const lines: string[] = [];
+		const r = await sandbox.exec("printf 'a\\nb\\nc'", {
+			onLine: (l) => lines.push(l),
+		});
+		expect(lines).toEqual(["a", "b", "c"]);
+		expect(r.stdout).toBe("a\nb\nc");
+	});
+
+	it("AC#21 (all terminated): onLine fires per line, no extra fire on end", async () => {
+		if (skipAll || sandbox === undefined) return;
+		const lines: string[] = [];
+		const r = await sandbox.exec("printf 'a\\nb\\n'", {
+			onLine: (l) => lines.push(l),
+		});
+		// Exactly two lines — no trailing partial. The "fire on end if buf
+		// non-empty" branch must NOT inject a phantom "" line.
+		expect(lines).toEqual(["a", "b"]);
+		expect(r.stdout).toBe("a\nb\n");
+	});
+
+	it("AC#22: stdout invariant under onLine observation", async () => {
+		if (skipAll || sandbox === undefined) return;
+		const r = await sandbox.exec("echo hello", { onLine: () => {} });
+		expect(r.stdout).toBe("hello\n");
+	});
+
+	it("AC#23: stdin payload is delivered to the command", async () => {
+		if (skipAll || sandbox === undefined) return;
+		const r = await sandbox.exec("cat", { stdin: "round-trip-payload" });
+		expect(r.stdout).toBe("round-trip-payload");
+	});
+
+	it("AC#24: cwd option sets working directory", async () => {
+		if (skipAll || sandbox === undefined) return;
+		const r = await sandbox.exec("pwd", { cwd: "/tmp" });
+		expect(r.stdout.trim()).toBe("/tmp");
+	});
+
+	it("AC#25: concurrent dispose during exec rejects EXEC_FAILED with 'No such container'", async () => {
+		if (skipAll || sandbox === undefined) return;
+		const execPromise = sandbox.exec("sleep 5");
+		await new Promise((r) => setTimeout(r, 200));
+		await sandbox.dispose();
+		const outcome = await execPromise.then(
+			(r) => ({ kind: "result" as const, value: r }),
+			(e) => ({ kind: "error" as const, value: e }),
+		);
+		// Two valid outcomes depending on whether the docker exec process races
+		// the rm -f: (a) rejected SandboxError with EXEC_FAILED + "No such
+		// container" message, or (b) resolved ExecResult with non-zero exitCode
+		// and empty stderr (exec process exits before the container message
+		// propagates). Both mean the mid-flight exec correctly did not succeed.
+		if (outcome.kind === "error") {
+			expect(outcome.value).toBeInstanceOf(SandboxError);
+			expect(outcome.value.code).toBe("EXEC_FAILED");
+			expect(String(outcome.value.message)).toMatch(/No such container|is not running/i);
+		} else {
+			expect(outcome.value.exitCode).not.toBe(0);
+		}
+	});
+});

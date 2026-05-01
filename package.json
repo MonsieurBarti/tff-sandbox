@@ -1,0 +1,53 @@
+{
+  "name": "@the-forge-flow/sandbox",
+  "version": "0.0.1",
+  "description": "Sandboxed agent execution for The Forge Flow — run coding agents in isolated Docker sandboxes with git worktrees.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:e2e": "vitest run --config ./vitest.e2e.config.ts",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "fmt": "biome format --write .",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "prepare": "lefthook install || true"
+  },
+  "keywords": ["sandbox", "agent", "claude-code", "docker", "worktree", "tff", "the-forge-flow"],
+  "author": "The Forge Flow",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MonsieurBarti/tff-sandbox.git"
+  },
+  "bugs": { "url": "https://github.com/MonsieurBarti/tff-sandbox/issues" },
+  "homepage": "https://github.com/MonsieurBarti/tff-sandbox#readme",
+  "publishConfig": { "access": "public" },
+  "engines": { "node": ">=20.0.0" },
+  "packageManager": "bun@1.3.11",
+  "dependencies": {},
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@commitlint/cli": "^19.8.0",
+    "@commitlint/config-conventional": "^19.8.0",
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^2.1.0",
+    "lefthook": "^2.1.5",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

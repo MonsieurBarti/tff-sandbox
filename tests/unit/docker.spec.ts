@@ -1,8 +1,48 @@
-import { readFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import * as fsp from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { promisify } from "node:util";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { docker } from "../../src/docker.js";
 import { SandboxError } from "../../src/errors.js";
+
+const execFileAsync = promisify(execFile);
+
+let skipAll = false;
+
+beforeAll(async () => {
+	try {
+		await execFileAsync("docker", ["version", "--format", "{{.Server.Version}}"]);
+	} catch (e) {
+		skipAll = true;
+		console.warn(`tff-sandbox: docker daemon unavailable, skipping suite — ${String(e)}`);
+	}
+	// T06 will extend this with the image pre-warm + coldBuildBudget capture.
+});
+
+async function makeWorkRepo(): Promise<{ dir: string; cleanup: () => void }> {
+	const dir = mkdtempSync(path.join(tmpdir(), "tff-s03-repo-"));
+	await execFileAsync("git", ["init", "-q", "."], { cwd: dir });
+	await execFileAsync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
+	await execFileAsync("git", ["config", "user.name", "Test"], { cwd: dir });
+	await execFileAsync("git", ["commit", "-q", "--allow-empty", "-m", "init"], { cwd: dir });
+	return {
+		dir,
+		cleanup: () => rmSync(dir, { recursive: true, force: true }),
+	};
+}
+
+// Used by later tasks — silence unused-symbol lint here.
+void makeWorkRepo;
+void afterAll;
+void afterEach;
+void beforeEach;
+void vi;
+void fsp;
+void statSync;
 
 const dockerfilePath = fileURLToPath(
 	new URL("../../runtime/claude-code/Dockerfile", import.meta.url),
@@ -116,5 +156,28 @@ describe("sandbox-provider interfaces (compile-time)", () => {
 			},
 		};
 		expect(handle.workspacePath).toBe("/home/tff/workspace");
+	});
+});
+
+describe("validation (real daemon)", () => {
+	it("rejects with WORKTREE_NOT_FOUND when worktreePath does not exist", async () => {
+		if (skipAll) return;
+		const provider = docker();
+		const err = await provider
+			.start({ worktreePath: "/this/path/does/not/exist/tff-s03" })
+			.catch((e) => e);
+		expect(err).toBeInstanceOf(SandboxError);
+		expect(err.code).toBe("WORKTREE_NOT_FOUND");
+		expect(err.message).toContain(path.resolve("/this/path/does/not/exist/tff-s03"));
+	});
+
+	it("rejects with WORKTREE_NOT_FOUND when worktreePath is a file, not a directory", async () => {
+		if (skipAll) return;
+		const f = path.join(mkdtempSync(path.join(tmpdir(), "tff-s03-")), "afile");
+		await fsp.writeFile(f, "x");
+		const provider = docker();
+		const err = await provider.start({ worktreePath: f }).catch((e) => e);
+		expect(err).toBeInstanceOf(SandboxError);
+		expect(err.code).toBe("WORKTREE_NOT_FOUND");
 	});
 });

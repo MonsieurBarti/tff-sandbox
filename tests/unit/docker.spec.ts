@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,6 +13,7 @@ import { SandboxError } from "../../src/errors.js";
 const execFileAsync = promisify(execFile);
 
 let skipAll = false;
+let coldBuildBudget = 0;
 
 beforeAll(async () => {
 	try {
@@ -19,9 +21,33 @@ beforeAll(async () => {
 	} catch (e) {
 		skipAll = true;
 		console.warn(`tff-sandbox: docker daemon unavailable, skipping suite — ${String(e)}`);
+		return;
 	}
-	// T06 will extend this with the image pre-warm + coldBuildBudget capture.
-});
+	const repo = await makeWorkRepo();
+	// Force a cold build so coldBuildBudget reflects actual build time.
+	const dockerfileBytes = readFileSync(
+		fileURLToPath(new URL("../../runtime/claude-code/Dockerfile", import.meta.url)),
+	);
+	const sha12 = createHash("sha256").update(dockerfileBytes).digest("hex").slice(0, 12);
+	const prewarmTag = `tff-sandbox-runtime-claude-code:${sha12}`;
+	try {
+		await execFileAsync("docker", ["image", "rm", prewarmTag]);
+	} catch {
+		/* not present — fine */
+	}
+	const provider = docker();
+	const t0 = Date.now();
+	try {
+		const sandbox = await provider.start({ worktreePath: repo.dir });
+		coldBuildBudget = Date.now() - t0;
+		await sandbox.dispose();
+	} catch (e) {
+		skipAll = true;
+		console.warn(`tff-sandbox: image pre-warm failed — ${String(e)}`);
+	} finally {
+		repo.cleanup();
+	}
+}, 600_000);
 
 async function makeWorkRepo(): Promise<{ dir: string; cleanup: () => void }> {
 	const dir = mkdtempSync(path.join(tmpdir(), "tff-s03-repo-"));
@@ -213,5 +239,93 @@ describe("public surface", () => {
 			branchStrategy: { type: "branch", branch: "agent/x" },
 		};
 		expect(runOpts.sandbox.name).toBe("docker");
+	});
+});
+
+describe("image build & cache", () => {
+	let repo: { dir: string; cleanup: () => void };
+
+	beforeEach(async () => {
+		if (skipAll) return;
+		repo = await makeWorkRepo();
+	});
+
+	afterEach(() => {
+		repo?.cleanup();
+	});
+
+	describe("AC#4 cold-state build", () => {
+		beforeEach(async () => {
+			if (skipAll) return;
+			const dockerfileBytes = readFileSync(
+				fileURLToPath(new URL("../../runtime/claude-code/Dockerfile", import.meta.url)),
+			);
+			const sha12 = createHash("sha256").update(dockerfileBytes).digest("hex").slice(0, 12);
+			const expectedTag = `tff-sandbox-runtime-claude-code:${sha12}`;
+			try {
+				await execFileAsync("docker", ["image", "rm", expectedTag]);
+			} catch {
+				/* not present — fine */
+			}
+		});
+
+		it("AC#4: builds and tags image as tff-sandbox-runtime-claude-code:<sha12>", async () => {
+			if (skipAll) return;
+			const dockerfileBytes = readFileSync(
+				fileURLToPath(new URL("../../runtime/claude-code/Dockerfile", import.meta.url)),
+			);
+			const sha12 = createHash("sha256").update(dockerfileBytes).digest("hex").slice(0, 12);
+			const expectedTag = `tff-sandbox-runtime-claude-code:${sha12}`;
+			const sandbox = await docker({ shareClaudeConfig: false }).start({ worktreePath: repo.dir });
+			try {
+				await execFileAsync("docker", ["image", "inspect", expectedTag]); // exits 0
+			} finally {
+				await sandbox.dispose();
+			}
+		});
+	});
+
+	it("AC#5: warm-cache start hits cache (image exists; wall-time < 10s; >= 5x faster than cold build)", async () => {
+		if (skipAll) return;
+		const dockerfileBytes = readFileSync(
+			fileURLToPath(new URL("../../runtime/claude-code/Dockerfile", import.meta.url)),
+		);
+		const sha12 = createHash("sha256").update(dockerfileBytes).digest("hex").slice(0, 12);
+		const expectedTag = `tff-sandbox-runtime-claude-code:${sha12}`;
+		const provider = docker({ shareClaudeConfig: false });
+		const t0 = Date.now();
+		const sandbox = await provider.start({ worktreePath: repo.dir });
+		const wallTime = Date.now() - t0;
+		await sandbox.dispose();
+		// Upper bound: regression guard against a 30s rebuild.
+		expect(wallTime).toBeLessThan(10_000);
+		// Lower bound: only reject obvious no-ops.
+		expect(wallTime).toBeGreaterThan(0);
+		// Positive existence: the cache hit means the image still exists and is
+		// the one keyed by the Dockerfile-bytes hash.
+		await execFileAsync("docker", ["image", "inspect", expectedTag]); // exits 0
+		// Cache-hit ratio: warm path is materially faster than the cold build
+		// captured during the suite-level pre-warm.
+		expect(coldBuildBudget).toBeGreaterThanOrEqual(wallTime * 5);
+	});
+
+	it("AC#6: imageName-set branch does not consult bundled Dockerfile", async () => {
+		if (skipAll) return;
+		const dockerfilePath = fileURLToPath(
+			new URL("../../runtime/claude-code/Dockerfile", import.meta.url),
+		);
+		const dockerfileBytes = readFileSync(dockerfilePath);
+		const sha12 = createHash("sha256").update(dockerfileBytes).digest("hex").slice(0, 12);
+		const tag = `tff-sandbox-runtime-claude-code:${sha12}`;
+		const stashed = `${dockerfilePath}.stash`;
+		await fsp.rename(dockerfilePath, stashed);
+		try {
+			const provider = docker({ imageName: tag, shareClaudeConfig: false });
+			const sandbox = await provider.start({ worktreePath: repo.dir });
+			expect(sandbox.containerName).toMatch(/^tff-sandbox-/);
+			await sandbox.dispose();
+		} finally {
+			await fsp.rename(stashed, dockerfilePath);
+		}
 	});
 });

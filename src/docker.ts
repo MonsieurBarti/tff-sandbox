@@ -1,5 +1,5 @@
-import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { execFile, execFileSync, spawn } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -122,22 +122,170 @@ export function docker(opts: DockerOptions = {}): SandboxProvider {
 				}
 			}
 
-			// Step 6+ (docker run) lands in T07+.
-			// Stub handle: satisfies SandboxHandle interface until T07 implements run.
-			const stubHandle: SandboxHandle = {
-				containerName: `tff-sandbox-stub-${imageTag}`,
+			// Step 6: mounts. T07 only adds the worktree mount; the layered
+			// ~/.claude ro-parent + rw-projects mounts are appended in T08. The
+			// MOUNT ORDER MATTERS invariant (ro parent first, rw child second —
+			// second mount wins at the sub-path) is enforced by T08; T07's tests
+			// pass shareClaudeConfig:false to avoid coupling on the host's real
+			// ~/.claude.
+			const mounts: string[] = [`${resolvedWorktree}:/home/tff/workspace`];
+
+			// Step 7: merge env, auto-forward ANTHROPIC_API_KEY.
+			const merged: Record<string, string> = {
+				...(startOpts.env ?? {}),
+				...(opts.env ?? {}),
+			};
+			if (process.env.ANTHROPIC_API_KEY !== undefined && merged.ANTHROPIC_API_KEY === undefined) {
+				merged.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+			}
+
+			// Step 8: name (assigned only after run succeeds).
+			const generatedName = `tff-sandbox-${randomUUID()}`;
+			let containerName: string | null = null;
+
+			// Step 9: register process-level cleanup hooks BEFORE docker run.
+			const onExit = (): void => {
+				if (containerName === null) return;
+				try {
+					execFileSync("docker", ["rm", "-f", containerName], { stdio: "ignore" });
+				} catch {
+					/* best-effort */
+				}
+			};
+			const onSignal = (): void => {
+				onExit();
+				process.exit(1);
+			};
+			process.on("exit", onExit);
+			process.on("SIGINT", onSignal);
+			process.on("SIGTERM", onSignal);
+
+			// Step 10: best-effort prune of stopped zombies.
+			try {
+				const { stdout } = await execFileAsync("docker", [
+					"ps",
+					"-a",
+					"--filter",
+					"label=tff-sandbox=1",
+					"--filter",
+					"status=exited",
+					"--format",
+					"{{.Names}}",
+				]);
+				const zombies = stdout.split("\n").filter((n) => n.length > 0);
+				for (const z of zombies) {
+					await execFileAsync("docker", ["rm", z]).catch(() => {});
+				}
+			} catch {
+				/* best-effort */
+			}
+
+			// Step 11: docker run -d.
+			const hostUid = process.getuid?.() ?? 1000;
+			const hostGid = process.getgid?.() ?? 1000;
+			const runArgs: string[] = [
+				"run",
+				"-d",
+				"--rm",
+				"--name",
+				generatedName,
+				"--label",
+				"tff-sandbox=1",
+				"--user",
+				`${hostUid}:${hostGid}`,
+				"-w",
+				"/home/tff/workspace",
+			];
+			// MOUNT ORDER MATTERS: ro parent first, rw child second — second
+			// mount wins at sub-path. Do not reorder. (T08's tests pin the
+			// resulting -v flag order to defend against future refactors that
+			// might sort mounts.)
+			for (const m of mounts) runArgs.push("-v", m);
+			for (const [k, v] of Object.entries(merged)) runArgs.push("-e", `${k}=${v}`);
+			runArgs.push(imageTag);
+
+			try {
+				await execFileAsync("docker", runArgs);
+			} catch (err) {
+				process.off("exit", onExit);
+				process.off("SIGINT", onSignal);
+				process.off("SIGTERM", onSignal);
+				throw new SandboxError(
+					"CONTAINER_START_FAILED",
+					getStderr(err) ?? getErrorMessage(err),
+					err,
+				);
+			}
+			containerName = generatedName;
+
+			// Step 12: readiness probe.
+			let ready = false;
+			let probeErr: unknown = undefined;
+			for (let i = 0; i < 5; i++) {
+				try {
+					await execFileAsync("docker", ["exec", containerName, "true"]);
+					ready = true;
+					break;
+				} catch (e) {
+					probeErr = e;
+					await new Promise((r) => setTimeout(r, 100));
+				}
+			}
+			if (!ready) {
+				try {
+					await execFileAsync("docker", ["rm", "-f", containerName]);
+				} catch {
+					/* best-effort */
+				}
+				process.off("exit", onExit);
+				process.off("SIGINT", onSignal);
+				process.off("SIGTERM", onSignal);
+				throw new SandboxError(
+					"CONTAINER_START_FAILED",
+					"Container did not become ready within 500ms",
+					probeErr,
+				);
+			}
+
+			// Step 13: build handle. exec + dispose are stubs here; T09 rewrites
+			// exec with streaming + onLine semantics, T10 hardens dispose with
+			// the swallow regex + DISPOSE_FAILED classification.
+			let disposed = false;
+			const handle: SandboxHandle = {
+				containerName: generatedName,
 				workspacePath: "/home/tff/workspace",
-				async exec() {
-					throw new SandboxError("DOCKER_UNAVAILABLE", "exec() not yet implemented");
+				async exec(command, _execOpts) {
+					try {
+						const { stdout, stderr } = await execFileAsync("docker", [
+							"exec",
+							generatedName,
+							"sh",
+							"-c",
+							command,
+						]);
+						return { stdout, stderr, exitCode: 0 };
+					} catch (e) {
+						const stderr = getStderr(e) ?? "";
+						return { stdout: "", stderr, exitCode: 1 };
+					}
 				},
 				async dispose() {
-					/* no container to stop — stub */
+					if (disposed) return;
+					disposed = true;
+					try {
+						await execFileAsync("docker", ["rm", "-f", generatedName]);
+					} catch {
+						/* best-effort, T10 hardens */
+					}
+					process.off("exit", onExit);
+					process.off("SIGINT", onSignal);
+					process.off("SIGTERM", onSignal);
 				},
 				async [Symbol.asyncDispose]() {
-					/* no container to stop — stub */
+					await this.dispose();
 				},
 			};
-			return stubHandle;
+			return handle;
 		},
 	};
 }

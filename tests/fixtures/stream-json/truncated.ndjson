@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"fix-003","uuid":"sys-003"}
+{"type":"assistant","message":{"id":"msg-003","role":"assistant","type":"message","content":[{"type":"text","text":"interrupted mid-"}]},"session_id":"fix-003","uuid":"asst-003"}

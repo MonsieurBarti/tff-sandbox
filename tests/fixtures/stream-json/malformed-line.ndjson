@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"fix-004","uuid":"sys-004"}
+some non-json debug noise
+{"type":"assistant","message":{"id":"msg-004","role":"assistant","type":"message","content":[{"type":"text","text":"survived"}]},"session_id":"fix-004","uuid":"asst-004"}
+{"type":"result","subtype":"success","is_error":false,"result":"survived","session_id":"fix-004","uuid":"res-004"}

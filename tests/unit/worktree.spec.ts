@@ -303,7 +303,10 @@ describe("createWorktree", () => {
 		});
 
 		it("throws BRANCH_IN_USE_EXTERNAL when branch is checked out in main worktree", async () => {
-			await execFileAsync("git", ["checkout", "-b", "agent/foo"], { cwd: repo.repoPath });
+			await execFileAsync("git", ["checkout", "-b", "agent/foo"], {
+				cwd: repo.repoPath,
+				env: cleanGitEnv(),
+			});
 			await expect(
 				createWorktree({
 					repoPath: repo.repoPath,
@@ -313,13 +316,17 @@ describe("createWorktree", () => {
 		});
 
 		it("throws BRANCH_IN_USE_EXTERNAL when branch is checked out in an external worktree", async () => {
-			await execFileAsync("git", ["branch", "agent/foo"], { cwd: repo.repoPath });
+			await execFileAsync("git", ["branch", "agent/foo"], {
+				cwd: repo.repoPath,
+				env: cleanGitEnv(),
+			});
 			const ext = mkdtempSync(path.join(tmpdir(), "tff-external-"));
 			// `git worktree add` requires the target dir not pre-exist; use a child path.
 			const extWt = path.join(ext, "wt");
 			try {
 				await execFileAsync("git", ["worktree", "add", extWt, "agent/foo"], {
 					cwd: repo.repoPath,
+					env: cleanGitEnv(),
 				});
 				const err = await createWorktree({
 					repoPath: repo.repoPath,
@@ -331,6 +338,7 @@ describe("createWorktree", () => {
 			} finally {
 				await execFileAsync("git", ["worktree", "remove", "--force", extWt], {
 					cwd: repo.repoPath,
+					env: cleanGitEnv(),
 				}).catch(() => {});
 				rmSync(ext, { recursive: true, force: true });
 			}
@@ -347,6 +355,7 @@ describe("createWorktree", () => {
 			rmSync(first.path, { recursive: true, force: true });
 			const { stdout: pre } = await execFileAsync("git", ["worktree", "list", "--porcelain"], {
 				cwd: repo.repoPath,
+				env: cleanGitEnv(),
 			});
 			expect(pre).toMatch(/prunable/);
 
@@ -368,6 +377,7 @@ describe("createWorktree", () => {
 			mkdirSync(path.dirname(worktreePath), { recursive: true });
 			await execFileAsync("git", ["worktree", "add", "-b", "otherbranch", worktreePath, "HEAD"], {
 				cwd: repo.repoPath,
+				env: cleanGitEnv(),
 			});
 			const handle = await createWorktree({
 				repoPath: repo.repoPath,
@@ -378,6 +388,7 @@ describe("createWorktree", () => {
 			// otherbranch ref still exists (we only nuked the worktree, not the ref)
 			const { stdout: branches } = await execFileAsync("git", ["branch", "--list"], {
 				cwd: repo.repoPath,
+				env: cleanGitEnv(),
 			});
 			expect(branches).toMatch(/otherbranch/);
 		});
@@ -392,6 +403,7 @@ describe("createWorktree", () => {
 			mkdirSync(path.dirname(worktreePath), { recursive: true });
 			await execFileAsync("git", ["worktree", "add", "--detach", worktreePath, "HEAD"], {
 				cwd: repo.repoPath,
+				env: cleanGitEnv(),
 			});
 			const handle = await createWorktree({
 				repoPath: repo.repoPath,

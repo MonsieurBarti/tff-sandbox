@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { runClaudeCode } from "../../src/agent/claude-code.js";
+import { docker } from "../../src/docker.js";
 import type { ExecOptions, ExecResult, SandboxHandle } from "../../src/sandbox-provider.js";
 
 const execFileAsync = promisify(execFile);
@@ -161,4 +162,92 @@ describe("runClaudeCode (stubbed handle)", () => {
 		expect(typeof mod.AgentError).toBe("function");
 		// Type-only re-exports (AgentResult, RunClaudeCodeOptions, AgentErrorCode) verified by tsc --noEmit.
 	});
+});
+
+describe("runClaudeCode (real container)", () => {
+	let skipDocker = false;
+	let skipNoCreds = false;
+
+	beforeAll(async () => {
+		try {
+			await execFileAsync("docker", ["version", "--format", "{{.Server.Version}}"]);
+		} catch {
+			skipDocker = true;
+			console.warn("tff-sandbox: docker daemon unavailable, skipping S04 real-container block");
+			return;
+		}
+		// Auth gate: ANTHROPIC_API_KEY is the only auth path that propagates into
+		// the container — src/docker.ts auto-forwards it. ~/.claude.json existence
+		// is NOT a valid signal: the claude CLI creates it on first install as a
+		// preferences file, while OAuth tokens live in the macOS keychain (or
+		// equivalent) and don't reach the container.
+		if (process.env.ANTHROPIC_API_KEY === undefined) {
+			skipNoCreds = true;
+			console.warn(
+				"tff-sandbox: ANTHROPIC_API_KEY unset, skipping S04 cred-gated cases (AC#1, #3, #5)",
+			);
+		}
+	}, 600_000);
+
+	async function makeWorktree(): Promise<string> {
+		const wt = mkdtempSync(path.join(tmpdir(), "s04-real-"));
+		await execFileAsync("git", ["-C", wt, "init"]);
+		return wt;
+	}
+
+	it("AC#1: global identity flows into commit author via env-var injection", async () => {
+		if (skipDocker || skipNoCreds) return;
+		// Seed --global identity for the duration of this test (the runner reads --global when no hostWorktreePath).
+		const tmpHome = mkdtempSync(path.join(tmpdir(), "s04-home-"));
+		const cfg = path.join(tmpHome, "config");
+		await execFileAsync("git", ["config", "--file", cfg, "user.email", "global@example.invalid"]);
+		await execFileAsync("git", ["config", "--file", cfg, "user.name", "Global User"]);
+		const prevG = process.env.GIT_CONFIG_GLOBAL;
+		const prevS = process.env.GIT_CONFIG_SYSTEM;
+		process.env.GIT_CONFIG_GLOBAL = cfg;
+		process.env.GIT_CONFIG_SYSTEM = "/dev/null";
+		try {
+			const wt = await makeWorktree();
+			await using sandbox = await docker().start({ worktreePath: wt });
+			await runClaudeCode(
+				sandbox,
+				"Run: git commit --allow-empty -m 'identity test'. Then say 'done'.",
+			);
+			const { stdout } = await execFileAsync("git", ["-C", wt, "log", "-1", "--format=%ae|%an"]);
+			expect(stdout.trim()).toBe("global@example.invalid|Global User");
+		} finally {
+			if (prevG === undefined) Reflect.deleteProperty(process.env, "GIT_CONFIG_GLOBAL");
+			else process.env.GIT_CONFIG_GLOBAL = prevG;
+			if (prevS === undefined) Reflect.deleteProperty(process.env, "GIT_CONFIG_SYSTEM");
+			else process.env.GIT_CONFIG_SYSTEM = prevS;
+		}
+	}, 120_000);
+
+	it("AC#3: single-quote in identity round-trips through env vars to commit author", async () => {
+		if (skipDocker || skipNoCreds) return;
+		const wt = await makeWorktree();
+		await execFileAsync("git", ["-C", wt, "config", "user.name", "O'Brien"]);
+		await execFileAsync("git", ["-C", wt, "config", "user.email", "ob@example.invalid"]);
+		await using sandbox = await docker().start({ worktreePath: wt });
+		await runClaudeCode(
+			sandbox,
+			"Run: git commit --allow-empty -m 'quote test'. Then say 'done'.",
+			{ hostWorktreePath: wt },
+		);
+		const { stdout } = await execFileAsync("git", ["-C", wt, "log", "-1", "--format=%an"]);
+		expect(stdout.trim()).toBe("O'Brien");
+	}, 120_000);
+
+	it("AC#5: smoke — claude returns a non-empty finalText containing 'hello'", async () => {
+		if (skipDocker || skipNoCreds) return;
+		const wt = await makeWorktree();
+		await execFileAsync("git", ["-C", wt, "config", "user.name", "Smoke"]);
+		await execFileAsync("git", ["-C", wt, "config", "user.email", "smoke@example.invalid"]);
+		await using sandbox = await docker().start({ worktreePath: wt });
+		const r = await runClaudeCode(sandbox, "reply with exactly the word HELLO and nothing else", {
+			hostWorktreePath: wt,
+		});
+		expect(r.exitCode).toBe(0);
+		expect(r.finalText.toLowerCase()).toContain("hello");
+	}, 120_000);
 });

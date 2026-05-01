@@ -57,9 +57,9 @@ describe("runClaudeCode (stubbed handle)", () => {
 		prevGitSystem = process.env.GIT_CONFIG_SYSTEM;
 	});
 	afterEach(() => {
-		if (prevGitGlobal === undefined) process.env.GIT_CONFIG_GLOBAL = undefined;
+		if (prevGitGlobal === undefined) Reflect.deleteProperty(process.env, "GIT_CONFIG_GLOBAL");
 		else process.env.GIT_CONFIG_GLOBAL = prevGitGlobal;
-		if (prevGitSystem === undefined) process.env.GIT_CONFIG_SYSTEM = undefined;
+		if (prevGitSystem === undefined) Reflect.deleteProperty(process.env, "GIT_CONFIG_SYSTEM");
 		else process.env.GIT_CONFIG_SYSTEM = prevGitSystem;
 	});
 

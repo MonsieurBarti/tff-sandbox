@@ -404,5 +404,107 @@ describe("createWorktree", () => {
 });
 
 describe("WorktreeHandle", () => {
-	it.todo("populated by T05");
+	let repo: { repoPath: string; cleanup: () => void };
+	let warnSpy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(async () => {
+		repo = await makeRepo();
+		warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+	});
+
+	afterEach(() => {
+		repo.cleanup();
+		warnSpy.mockRestore();
+	});
+
+	it("getHead returns the current SHA inside the worktree", async () => {
+		const handle = await createWorktree({
+			repoPath: repo.repoPath,
+			branchStrategy: { type: "branch", branch: "agent/foo" },
+		});
+		const head = await handle.getHead();
+		expect(head).toMatch(/^[0-9a-f]{40}$/);
+		const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+			cwd: handle.path,
+			env: cleanGitEnv(),
+		});
+		expect(head).toBe(stdout.trim());
+	});
+
+	it("listCommitsSince returns new commits in topo order, newest first", async () => {
+		const handle = await createWorktree({
+			repoPath: repo.repoPath,
+			branchStrategy: { type: "branch", branch: "agent/foo" },
+		});
+		const before = await handle.getHead();
+		await execFileAsync("git", ["commit", "-q", "--allow-empty", "-m", "c1"], {
+			cwd: handle.path,
+			env: cleanGitEnv(),
+		});
+		await execFileAsync("git", ["commit", "-q", "--allow-empty", "-m", "c2"], {
+			cwd: handle.path,
+			env: cleanGitEnv(),
+		});
+		const commits = await handle.listCommitsSince(before);
+		expect(commits).toHaveLength(2);
+		const head = await handle.getHead();
+		expect(commits[0]?.sha).toBe(head); // newest first per --topo-order
+	});
+
+	it("listCommitsSince returns [] when no new commits exist", async () => {
+		const handle = await createWorktree({
+			repoPath: repo.repoPath,
+			branchStrategy: { type: "branch", branch: "agent/foo" },
+		});
+		const head = await handle.getHead();
+		const commits = await handle.listCommitsSince(head);
+		expect(commits).toEqual([]);
+	});
+
+	it("dispose removes the worktree dir but preserves the branch ref", async () => {
+		const handle = await createWorktree({
+			repoPath: repo.repoPath,
+			branchStrategy: { type: "branch", branch: "agent/foo" },
+		});
+		const fs = await import("node:fs");
+		expect(fs.existsSync(handle.path)).toBe(true);
+		await handle.dispose();
+		expect(fs.existsSync(handle.path)).toBe(false);
+		const { stdout } = await execFileAsync("git", ["branch", "--list", "agent/foo"], {
+			cwd: repo.repoPath,
+			env: cleanGitEnv(),
+		});
+		expect(stdout.trim().length).toBeGreaterThan(0);
+	});
+
+	it("dispose is idempotent: a second call does not throw", async () => {
+		const handle = await createWorktree({
+			repoPath: repo.repoPath,
+			branchStrategy: { type: "branch", branch: "agent/foo" },
+		});
+		await handle.dispose();
+		await expect(handle.dispose()).resolves.toBeUndefined();
+	});
+
+	it("dispose does not throw if the worktree was removed externally first", async () => {
+		const handle = await createWorktree({
+			repoPath: repo.repoPath,
+			branchStrategy: { type: "branch", branch: "agent/foo" },
+		});
+		// External actor: nuke the dir AND prune the metadata.
+		rmSync(handle.path, { recursive: true, force: true });
+		await execFileAsync("git", ["worktree", "prune"], {
+			cwd: repo.repoPath,
+			env: cleanGitEnv(),
+		});
+		await expect(handle.dispose()).resolves.toBeUndefined();
+	});
+
+	it("handle.path is realpathed (macOS /private/var round-trip)", async () => {
+		const handle = await createWorktree({
+			repoPath: repo.repoPath,
+			branchStrategy: { type: "branch", branch: "agent/foo" },
+		});
+		expect(handle.path).toBe(realpathSync(handle.path));
+	});
 });

@@ -204,6 +204,10 @@ function makeHandle(
 				disposed = true;
 				return;
 			} catch (err) {
+				// "Already gone" path: re-list, swallow if absent. `git worktree
+				// list --porcelain` returns realpathed paths and `worktreePath`
+				// is already realpathed (set during createWorktree step 3) so
+				// the comparison is symmetric on macOS.
 				try {
 					const { stdout } = await execFileAsync("git", ["worktree", "list", "--porcelain"], {
 						cwd: repoPath,

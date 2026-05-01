@@ -8,6 +8,7 @@ describe.skip("e2e: run() with claude-code + docker", () => {
 			sandbox: docker(),
 			prompt: "echo hello > out.txt && git add . && git commit -m 'test'",
 			branchStrategy: { type: "branch", branch: "agent/smoke" },
+			repoPath: "/tmp",
 		});
 		expect(result.branch).toBe("agent/smoke");
 		expect(result.commits.length).toBeGreaterThan(0);

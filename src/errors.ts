@@ -40,3 +40,19 @@ export class SandboxError extends Error {
 		}
 	}
 }
+
+export type AgentErrorCode = "GIT_IDENTITY_NOT_CONFIGURED" | "STREAM_TRUNCATED";
+
+export class AgentError extends Error {
+	readonly code: AgentErrorCode;
+	override readonly cause?: unknown;
+
+	constructor(code: AgentErrorCode, message: string, cause?: unknown) {
+		super(message);
+		this.name = "AgentError";
+		this.code = code;
+		if (cause !== undefined) {
+			this.cause = cause;
+		}
+	}
+}

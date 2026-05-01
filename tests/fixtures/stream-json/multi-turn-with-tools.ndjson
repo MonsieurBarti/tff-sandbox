@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"fix-002","model":"claude-sonnet-4-6","claude_code_version":"2.1.126","uuid":"sys-002"}
+{"type":"assistant","message":{"id":"msg-002a","role":"assistant","type":"message","content":[{"type":"text","text":"step 1"},{"type":"tool_use","id":"tu-1","name":"bash","input":{"command":"ls"}}]},"session_id":"fix-002","uuid":"asst-002a"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-1","content":"file.txt"}]},"session_id":"fix-002","uuid":"usr-002"}
+{"type":"assistant","message":{"id":"msg-002b","role":"assistant","type":"message","content":[{"type":"text","text":"final answer"}]},"session_id":"fix-002","uuid":"asst-002b"}
+{"type":"result","subtype":"success","is_error":false,"result":"final answer","session_id":"fix-002","uuid":"res-002"}

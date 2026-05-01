@@ -43,6 +43,8 @@ export type { CreateWorktreeOptions, WorktreeHandle } from "./worktree.js";
 
 export { SandboxError } from "./errors.js";
 export type { SandboxErrorCode } from "./errors.js";
+export { AgentError } from "./errors.js";
+export type { AgentErrorCode } from "./errors.js";
 export { docker } from "./docker.js";
 export type { DockerOptions } from "./docker.js";
 export type {

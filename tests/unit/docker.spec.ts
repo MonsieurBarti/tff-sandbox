@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { docker } from "../../src/docker.js";
 import { SandboxError } from "../../src/errors.js";
 
 const dockerfilePath = fileURLToPath(
@@ -68,6 +69,29 @@ describe("SandboxError", () => {
 		const sbe = new SandboxError("DOCKER_UNAVAILABLE", "y");
 		expect(wte).not.toBeInstanceOf(SandboxError);
 		expect(sbe).not.toBeInstanceOf(WorktreeError);
+	});
+});
+
+describe("docker() factory", () => {
+	it("returns a SandboxProvider with name === 'docker' and start()", () => {
+		const provider = docker();
+		expect(provider.name).toBe("docker");
+		expect(typeof provider.start).toBe("function");
+	});
+
+	it("rejects synchronously with INVALID_OPTIONS when imageName is set without shareClaudeConfig: false", async () => {
+		const provider = docker({ imageName: "custom:latest" });
+		await expect(provider.start({ worktreePath: "/tmp" })).rejects.toMatchObject({
+			name: "SandboxError",
+			code: "INVALID_OPTIONS",
+		});
+	});
+
+	it("accepts imageName when shareClaudeConfig is explicitly false (does not throw INVALID_OPTIONS)", async () => {
+		const provider = docker({ imageName: "custom:latest", shareClaudeConfig: false });
+		const err = await provider.start({ worktreePath: "/nonexistent-tff-fixture" }).catch((e) => e);
+		expect(err).toBeInstanceOf(Error);
+		expect(err.code).not.toBe("INVALID_OPTIONS");
 	});
 });
 

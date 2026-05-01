@@ -1,5 +1,6 @@
+import type { SandboxProvider } from "./sandbox-provider.js";
+
 export type AgentKind = "claude-code";
-export type SandboxKind = "docker";
 
 export type BranchStrategy = {
 	type: "branch";
@@ -14,7 +15,7 @@ export type BranchStrategy = {
 
 export type RunOptions = {
 	agent: AgentKind;
-	sandbox: SandboxKind;
+	sandbox: SandboxProvider;
 	prompt: string;
 	branchStrategy: BranchStrategy;
 };
@@ -31,7 +32,7 @@ export type RunResult = {
 
 export async function run(options: RunOptions): Promise<RunResult> {
 	throw new Error(
-		`@the-forge-flow/sandbox: run() not implemented (got agent=${options.agent}, sandbox=${options.sandbox})`,
+		`@the-forge-flow/sandbox: run() not implemented (got agent=${options.agent}, sandbox=${options.sandbox.name})`,
 	);
 }
 
@@ -39,3 +40,15 @@ export { WorktreeError } from "./errors.js";
 export type { WorktreeErrorCode } from "./errors.js";
 export { createWorktree } from "./worktree.js";
 export type { CreateWorktreeOptions, WorktreeHandle } from "./worktree.js";
+
+export { SandboxError } from "./errors.js";
+export type { SandboxErrorCode } from "./errors.js";
+export { docker } from "./docker.js";
+export type { DockerOptions } from "./docker.js";
+export type {
+	ExecOptions,
+	ExecResult,
+	SandboxHandle,
+	SandboxProvider,
+	StartOptions,
+} from "./sandbox-provider.js";

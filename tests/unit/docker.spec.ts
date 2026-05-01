@@ -181,3 +181,37 @@ describe("validation (real daemon)", () => {
 		expect(err.code).toBe("WORKTREE_NOT_FOUND");
 	});
 });
+
+describe("public surface", () => {
+	it("AC#32: re-exports the full S03 surface at runtime", async () => {
+		const mod = await import("../../src/index.js");
+		expect(typeof mod.docker).toBe("function");
+		expect(typeof mod.SandboxError).toBe("function");
+	});
+
+	it("AC#32 (compile-time): type-only re-exports are observable via import-type", () => {
+		// If any of these named types goes missing from src/index.ts,
+		// tsc rejects this binding. The runtime body is a placeholder.
+		const _typecheck: {
+			provider: import("../../src/index.js").SandboxProvider;
+			handle: import("../../src/index.js").SandboxHandle;
+			start: import("../../src/index.js").StartOptions;
+			exec: import("../../src/index.js").ExecOptions;
+			result: import("../../src/index.js").ExecResult;
+			dockerOpts: import("../../src/index.js").DockerOptions;
+			errCode: import("../../src/index.js").SandboxErrorCode;
+		} | null = null;
+		expect(_typecheck).toBeNull();
+	});
+
+	it("AC#32: RunOptions.sandbox is a SandboxProvider (not the old SandboxKind literal)", async () => {
+		const mod = await import("../../src/index.js");
+		const runOpts: import("../../src/index.js").RunOptions = {
+			agent: "claude-code",
+			sandbox: mod.docker(),
+			prompt: "hi",
+			branchStrategy: { type: "branch", branch: "agent/x" },
+		};
+		expect(runOpts.sandbox.name).toBe("docker");
+	});
+});

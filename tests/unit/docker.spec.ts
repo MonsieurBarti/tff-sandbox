@@ -64,11 +64,6 @@ async function makeWorkRepo(): Promise<{ dir: string; cleanup: () => void }> {
 // Used by later tasks — silence unused-symbol lint here.
 void makeWorkRepo;
 void afterAll;
-void afterEach;
-void beforeEach;
-void vi;
-void fsp;
-void statSync;
 
 const dockerfilePath = fileURLToPath(
 	new URL("../../runtime/claude-code/Dockerfile", import.meta.url),
@@ -448,6 +443,239 @@ describe("image build & cache", () => {
 			await sandbox.dispose();
 		} finally {
 			await fsp.rename(stashed, dockerfilePath);
+		}
+	});
+});
+
+describe("mounts", () => {
+	let repo: { dir: string; cleanup: () => void };
+
+	beforeEach(async () => {
+		if (skipAll) return;
+		repo = await makeWorkRepo();
+	});
+
+	afterEach(() => {
+		repo?.cleanup();
+	});
+
+	// Returns `{ dir, jsonPath, cleanup }`. `jsonPath` is the sibling-relative
+	// `.claude.json` path (next to `dir`, not inside it) so we can assert that
+	// the per-test override truly isolates from the developer's host
+	// `~/.claude.json`. Tests that want the JSON mount populate it; tests that
+	// don't leave it absent.
+	async function makeClaudeDir(): Promise<{
+		dir: string;
+		jsonPath: string;
+		cleanup: () => void;
+	}> {
+		const parent = mkdtempSync(path.join(tmpdir(), "tff-s03-claude-parent-"));
+		const dir = path.join(parent, ".claude");
+		await fsp.mkdir(dir, { recursive: true });
+		await fsp.writeFile(path.join(dir, "CLAUDE.md"), "host-claude-md");
+		await fsp.mkdir(path.join(dir, "projects"), { recursive: true });
+		const jsonPath = path.join(parent, ".claude.json");
+		return {
+			dir,
+			jsonPath,
+			cleanup: () => rmSync(parent, { recursive: true, force: true }),
+		};
+	}
+
+	it("AC#8: worktree mount visible inside container", async () => {
+		if (skipAll) return;
+		await fsp.writeFile(path.join(repo.dir, "marker.txt"), "hi");
+		const sandbox = await docker().start({ worktreePath: repo.dir });
+		try {
+			const r = await sandbox.exec("ls /home/tff/workspace");
+			expect(r.stdout).toMatch(/marker\.txt/);
+		} finally {
+			await sandbox.dispose();
+		}
+	});
+
+	it("AC#9: file written inside container appears on host owned by getuid()", async () => {
+		if (skipAll) return;
+		const sandbox = await docker().start({ worktreePath: repo.dir });
+		try {
+			const r = await sandbox.exec("touch /home/tff/workspace/foo");
+			expect(r.exitCode).toBe(0);
+			const st = statSync(path.join(repo.dir, "foo"));
+			expect(st.uid).toBe(process.getuid?.() ?? 1000);
+		} finally {
+			await sandbox.dispose();
+		}
+	});
+
+	it("AC#10: ~/.claude/CLAUDE.md readable inside container", async () => {
+		if (skipAll) return;
+		const cfg = await makeClaudeDir();
+		try {
+			const sandbox = await docker({ claudeConfigPath: cfg.dir }).start({
+				worktreePath: repo.dir,
+			});
+			try {
+				const r = await sandbox.exec("cat /home/tff/.claude/CLAUDE.md");
+				expect(r.stdout).toBe("host-claude-md");
+			} finally {
+				await sandbox.dispose();
+			}
+		} finally {
+			cfg.cleanup();
+		}
+	});
+
+	it("AC#11: ~/.claude is read-only — write fails, host byte-identical", async () => {
+		if (skipAll) return;
+		const cfg = await makeClaudeDir();
+		try {
+			const before = await fsp.readFile(path.join(cfg.dir, "CLAUDE.md"));
+			const sandbox = await docker({ claudeConfigPath: cfg.dir }).start({
+				worktreePath: repo.dir,
+			});
+			try {
+				const r = await sandbox.exec("sh -c 'echo X >> /home/tff/.claude/CLAUDE.md'");
+				expect(r.exitCode).not.toBe(0);
+			} finally {
+				await sandbox.dispose();
+			}
+			const after = await fsp.readFile(path.join(cfg.dir, "CLAUDE.md"));
+			expect(after.equals(before)).toBe(true);
+		} finally {
+			cfg.cleanup();
+		}
+	});
+
+	it("AC#12: ~/.claude/projects is read-write — writes round-trip to host", async () => {
+		if (skipAll) return;
+		const cfg = await makeClaudeDir();
+		try {
+			const sandbox = await docker({ claudeConfigPath: cfg.dir }).start({
+				worktreePath: repo.dir,
+			});
+			try {
+				const name = `s-${randomUUID()}`;
+				await sandbox.exec(`echo session > /home/tff/.claude/projects/${name}`);
+				const onHost = await fsp.readFile(path.join(cfg.dir, "projects", name), "utf8");
+				expect(onHost.trim()).toBe("session");
+			} finally {
+				await sandbox.dispose();
+			}
+		} finally {
+			cfg.cleanup();
+		}
+	});
+
+	it("AC#13: shareClaudeConfig:false omits the mount (incl. .claude.json)", async () => {
+		if (skipAll) return;
+		const cfg = await makeClaudeDir();
+		// Seed a sibling .claude.json so the test would catch a regression
+		// where shareClaudeConfig:false fails to suppress the JSON mount.
+		await fsp.writeFile(cfg.jsonPath, '{"sentinel":true}');
+		try {
+			const sandbox = await docker({
+				shareClaudeConfig: false,
+				claudeConfigPath: cfg.dir,
+			}).start({ worktreePath: repo.dir });
+			try {
+				const r = await sandbox.exec("test -d /home/tff/.claude && echo yes || echo no");
+				expect(r.stdout.trim()).toBe("no");
+				const j = await sandbox.exec("test -e /home/tff/.claude.json && echo yes || echo no");
+				expect(j.stdout.trim()).toBe("no");
+			} finally {
+				await sandbox.dispose();
+			}
+		} finally {
+			cfg.cleanup();
+		}
+	});
+
+	it("AC#14: missing claude dir → start() succeeds, exactly one console.warn, no claude mount, no .claude.json mount", async () => {
+		if (skipAll) return;
+		const ghostParent = mkdtempSync(path.join(tmpdir(), "tff-s03-ghost-"));
+		const ghost = path.join(ghostParent, ".claude");
+		// Seed the sibling .claude.json — the directory-exists branch should
+		// suppress the JSON mount even though the JSON file itself exists.
+		await fsp.writeFile(path.join(ghostParent, ".claude.json"), '{"sentinel":true}');
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const sandbox = await docker({ claudeConfigPath: ghost }).start({
+				worktreePath: repo.dir,
+			});
+			try {
+				const r = await sandbox.exec("test -d /home/tff/.claude && echo yes || echo no");
+				expect(r.stdout.trim()).toBe("no");
+				const j = await sandbox.exec("test -e /home/tff/.claude.json && echo yes || echo no");
+				expect(j.stdout.trim()).toBe("no");
+				expect(warnSpy).toHaveBeenCalledTimes(1);
+				expect(String(warnSpy.mock.calls[0]?.[0] ?? "")).toContain(ghost);
+			} finally {
+				await sandbox.dispose();
+			}
+		} finally {
+			warnSpy.mockRestore();
+			rmSync(ghostParent, { recursive: true, force: true });
+		}
+	});
+
+	it("MOUNT ORDER (real-Docker): docker inspect Mounts shows ro parent listed before rw child", async () => {
+		if (skipAll) return;
+		// Pin the load-bearing MOUNT ORDER invariant via a real-container
+		// inspection rather than spy-on-execFile (the production code uses a
+		// destructured `import { execFile } ...` so vi.spyOn on the module
+		// would not intercept the binding). Docker's `docker inspect` returns
+		// the Mounts array in the order they were declared on the CLI; assert
+		// the ro parent (CLAUDE config) precedes the rw projects sub-mount.
+		const cfg = await makeClaudeDir();
+		const sandbox = await docker({ claudeConfigPath: cfg.dir }).start({
+			worktreePath: repo.dir,
+		});
+		try {
+			const { stdout } = await execFileAsync("docker", [
+				"inspect",
+				"-f",
+				"{{json .Mounts}}",
+				sandbox.containerName,
+			]);
+			const mounts: ReadonlyArray<{ Source: string; Destination: string; Mode: string }> =
+				JSON.parse(stdout);
+			const roParentIdx = mounts.findIndex(
+				(m) => m.Destination === "/home/tff/.claude" && m.Mode.includes("ro"),
+			);
+			const rwChildIdx = mounts.findIndex((m) => m.Destination === "/home/tff/.claude/projects");
+			expect(roParentIdx).toBeGreaterThanOrEqual(0);
+			expect(rwChildIdx).toBeGreaterThan(roParentIdx);
+		} finally {
+			await sandbox.dispose();
+			cfg.cleanup();
+		}
+	});
+
+	it("ISOLATION (per-test claudeConfigPath): no Mount references host ~/.claude.json when override is set", async () => {
+		if (skipAll) return;
+		// Per-test isolation guarantee: when `claudeConfigPath` is overridden,
+		// the host's real ~/.claude.json must NEVER appear in the container's
+		// Mounts list, regardless of whether the host has one. This regression
+		// guard covers the SPEC §Algorithm step 6 sibling-relative lookup.
+		const os = await import("node:os");
+		const homeJsonNeedle = path.join(os.homedir(), ".claude.json");
+		const cfg = await makeClaudeDir();
+		const sandbox = await docker({ claudeConfigPath: cfg.dir }).start({
+			worktreePath: repo.dir,
+		});
+		try {
+			const { stdout } = await execFileAsync("docker", [
+				"inspect",
+				"-f",
+				"{{json .Mounts}}",
+				sandbox.containerName,
+			]);
+			const mounts: ReadonlyArray<{ Source: string }> = JSON.parse(stdout);
+			const offending = mounts.filter((m) => m.Source === homeJsonNeedle);
+			expect(offending).toEqual([]);
+		} finally {
+			await sandbox.dispose();
+			cfg.cleanup();
 		}
 	});
 });

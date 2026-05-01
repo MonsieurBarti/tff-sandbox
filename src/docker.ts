@@ -1,6 +1,7 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -122,13 +123,60 @@ export function docker(opts: DockerOptions = {}): SandboxProvider {
 				}
 			}
 
-			// Step 6: mounts. T07 only adds the worktree mount; the layered
-			// ~/.claude ro-parent + rw-projects mounts are appended in T08. The
-			// MOUNT ORDER MATTERS invariant (ro parent first, rw child second —
-			// second mount wins at the sub-path) is enforced by T08; T07's tests
-			// pass shareClaudeConfig:false to avoid coupling on the host's real
-			// ~/.claude.
+			// Step 6: resolve mounts.
 			const mounts: string[] = [`${resolvedWorktree}:/home/tff/workspace`];
+			const shareClaude = opts.shareClaudeConfig !== false;
+			// Track whether the image's baked-in ~/.claude and ~/.claude.json
+			// must be scrubbed after start (root exec). Scrubbing is needed
+			// whenever we do NOT mount the host claude dir — either because
+			// shareClaudeConfig is false or because the host dir is missing.
+			let maskImageClaudeArtifacts = true;
+			if (shareClaude) {
+				const claudeDir = opts.claudeConfigPath ?? path.join(os.homedir(), ".claude");
+				// Sibling-relative .claude.json lookup. With default claudeDir,
+				// this is `<homedir>/.claude.json`; with a test override it
+				// sits next to the test's claude dir. Per-test isolation
+				// guarantee — the host's real ~/.claude.json is never read
+				// when the override is set.
+				const claudeJsonPath = path.join(
+					path.dirname(claudeDir),
+					`${path.basename(claudeDir)}.json`,
+				);
+				let claudeDirExists = false;
+				try {
+					claudeDirExists = statSync(claudeDir).isDirectory();
+				} catch {
+					claudeDirExists = false;
+				}
+				if (claudeDirExists) {
+					// MOUNT ORDER MATTERS: ro parent first, rw child second —
+					// second mount wins at sub-path. Do not reorder.
+					mounts.push(`${claudeDir}:/home/tff/.claude:ro`);
+					const projectsDir = path.join(claudeDir, "projects");
+					try {
+						mkdirSync(projectsDir, { recursive: true });
+					} catch {
+						/* best-effort */
+					}
+					mounts.push(`${projectsDir}:/home/tff/.claude/projects`);
+					// .claude.json mount is nested inside the directory-exists
+					// branch so the JSON mount is gated by the same isolation
+					// envelope as the directory mount.
+					try {
+						if (statSync(claudeJsonPath).isFile()) {
+							mounts.push(`${claudeJsonPath}:/home/tff/.claude.json:ro`);
+						}
+					} catch {
+						/* not present, skip */
+					}
+					// Host mounts cover the image artifacts — no scrub needed.
+					maskImageClaudeArtifacts = false;
+				} else {
+					console.warn(
+						`tff-sandbox: shareClaudeConfig requested but '${claudeDir}' not found; container will run without host claude config`,
+					);
+				}
+			}
 
 			// Step 7: merge env, auto-forward ANTHROPIC_API_KEY.
 			const merged: Record<string, string> = {
@@ -245,6 +293,29 @@ export function docker(opts: DockerOptions = {}): SandboxProvider {
 					"Container did not become ready within 500ms",
 					probeErr,
 				);
+			}
+
+			// Step 12b: scrub image-baked claude artifacts when no host mount
+			// covers them. The claude-code installer bakes ~/.claude and
+			// ~/.claude.json into the image at build time (under UID 1000 /
+			// tff). Running the container with --user <hostUid> leaves those
+			// paths owned by tff, not the host user; a root exec removes them
+			// so AC#13 (shareClaudeConfig:false) and AC#14 (missing dir) see
+			// an empty slate rather than the installer's artifacts.
+			if (maskImageClaudeArtifacts) {
+				try {
+					await execFileAsync("docker", [
+						"exec",
+						"--user",
+						"root",
+						containerName,
+						"sh",
+						"-c",
+						"rm -rf /home/tff/.claude /home/tff/.claude.json",
+					]);
+				} catch {
+					/* best-effort */
+				}
 			}
 
 			// Step 13: build handle. exec + dispose are stubs here; T09 rewrites

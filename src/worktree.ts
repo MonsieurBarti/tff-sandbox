@@ -134,7 +134,7 @@ export async function createWorktree(opts: CreateWorktreeOptions): Promise<Workt
 		} else {
 			await execFileAsync(
 				"git",
-				["worktree", "add", "-b", branch, worktreePath, baseBranch ?? "HEAD"],
+				["worktree", "add", "-b", branch, "--", worktreePath, baseBranch ?? "HEAD"],
 				{ cwd: repoPath },
 			);
 		}
@@ -180,7 +180,7 @@ function makeHandle(
 			try {
 				const { stdout } = await execFileAsync(
 					"git",
-					["rev-list", "--topo-order", `${sha}..HEAD`],
+					["rev-list", "--topo-order", `^${sha}`, "HEAD"],
 					{ cwd: worktreePath },
 				);
 				const trimmed = stdout.trim();

@@ -415,6 +415,18 @@ describe("createWorktree", () => {
 	});
 
 	describe("git failures", () => {
+		it("rejects baseBranch starting with '-' as GIT_FAILED, not as a git flag", async () => {
+			const err = await createWorktree({
+				repoPath: repo.repoPath,
+				branchStrategy: { type: "branch", branch: "agent/foo", baseBranch: "--force" },
+			}).catch((e) => e);
+			expect(err).toBeInstanceOf(WorktreeError);
+			expect(err.code).toBe("GIT_FAILED");
+			// Proves git received "--force" as a commit-ish (positional), not as a flag.
+			// Git rejects unresolvable refs with stderr like "fatal: invalid reference"
+			// or "fatal: not a valid object name". Either is acceptable evidence.
+		});
+
 		it("wraps an unexpected git worktree add failure as GIT_FAILED with cause + stderr", async () => {
 			// Force a deterministic GIT_FAILED by pre-seeding the worktree path
 			// with a non-empty directory. `git worktree add` then fails (exit 128)
@@ -532,6 +544,16 @@ describe("WorktreeHandle", () => {
 			env: cleanGitEnv(),
 		});
 		await expect(handle.dispose()).resolves.toBeUndefined();
+	});
+
+	it("listCommitsSince rejects sha starting with '-' as GIT_FAILED, not as a flag", async () => {
+		const handle = await createWorktree({
+			repoPath: repo.repoPath,
+			branchStrategy: { type: "branch", branch: "agent/foo" },
+		});
+		const err = await handle.listCommitsSince("--all").catch((e) => e);
+		expect(err).toBeInstanceOf(WorktreeError);
+		expect(err.code).toBe("GIT_FAILED");
 	});
 
 	it("handle.path is realpathed (macOS /private/var round-trip)", async () => {

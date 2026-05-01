@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -334,6 +334,71 @@ describe("createWorktree", () => {
 				}).catch(() => {});
 				rmSync(ext, { recursive: true, force: true });
 			}
+		});
+	});
+
+	describe("stale handling", () => {
+		it("clears a prunable managed entry (directory removed externally) and proceeds", async () => {
+			const first = await createWorktree({
+				repoPath: repo.repoPath,
+				branchStrategy: { type: "branch", branch: "agent/foo" },
+			});
+			// Simulate crash: the working dir is gone but git metadata persists.
+			rmSync(first.path, { recursive: true, force: true });
+			const { stdout: pre } = await execFileAsync("git", ["worktree", "list", "--porcelain"], {
+				cwd: repo.repoPath,
+			});
+			expect(pre).toMatch(/prunable/);
+
+			const second = await createWorktree({
+				repoPath: repo.repoPath,
+				branchStrategy: { type: "branch", branch: "agent/foo" },
+			});
+			expect(second.path).toBe(first.path);
+			expect(second.reused).toBe(false);
+		});
+
+		it("removes a stale managed worktree on a different branch and proceeds", async () => {
+			const worktreePath = path.join(
+				realpathSync(repo.repoPath),
+				".tff-sandbox",
+				"worktrees",
+				"agent-foo",
+			);
+			mkdirSync(path.dirname(worktreePath), { recursive: true });
+			await execFileAsync("git", ["worktree", "add", "-b", "otherbranch", worktreePath, "HEAD"], {
+				cwd: repo.repoPath,
+			});
+			const handle = await createWorktree({
+				repoPath: repo.repoPath,
+				branchStrategy: { type: "branch", branch: "agent/foo" },
+			});
+			expect(handle.path).toBe(worktreePath);
+			expect(handle.branch).toBe("agent/foo");
+			// otherbranch ref still exists (we only nuked the worktree, not the ref)
+			const { stdout: branches } = await execFileAsync("git", ["branch", "--list"], {
+				cwd: repo.repoPath,
+			});
+			expect(branches).toMatch(/otherbranch/);
+		});
+
+		it("removes a stale detached managed worktree and proceeds", async () => {
+			const worktreePath = path.join(
+				realpathSync(repo.repoPath),
+				".tff-sandbox",
+				"worktrees",
+				"agent-foo",
+			);
+			mkdirSync(path.dirname(worktreePath), { recursive: true });
+			await execFileAsync("git", ["worktree", "add", "--detach", worktreePath, "HEAD"], {
+				cwd: repo.repoPath,
+			});
+			const handle = await createWorktree({
+				repoPath: repo.repoPath,
+				branchStrategy: { type: "branch", branch: "agent/foo" },
+			});
+			expect(handle.path).toBe(worktreePath);
+			expect(handle.branch).toBe("agent/foo");
 		});
 	});
 });

@@ -75,8 +75,24 @@ export async function createWorktree(opts: CreateWorktreeOptions): Promise<Workt
 	}
 	const worktreePath = path.join(worktreesDirReal, worktreeName);
 
-	// 4 + 5. List existing worktrees, classify collisions.
-	const listed = await listWorktrees(repoPath);
+	// 4. List, then resolve stale-by-path collisions before classifying.
+	let listed = await listWorktrees(repoPath);
+	const stale = findStaleManaged(listed, branch, worktreePath, worktreesDirReal);
+	if (stale.length > 0) {
+		await execFileAsync("git", ["worktree", "prune"], { cwd: repoPath }).catch(() => {});
+		for (const entry of stale) {
+			try {
+				await execFileAsync("git", ["worktree", "remove", "--force", entry.path], {
+					cwd: repoPath,
+				});
+			} catch {
+				// already gone (prunable case) — prune handled it
+			}
+		}
+		listed = await listWorktrees(repoPath);
+	}
+
+	// 5. Classify collision against the (possibly pruned) listing.
 	const collision = findCollision(listed, branch, worktreePath, worktreesDirReal);
 
 	if (collision.kind === "managed-reuse") {
@@ -288,4 +304,21 @@ function findCollision(
 		}
 	}
 	return { kind: "none" };
+}
+
+function findStaleManaged(
+	entries: WorktreeEntry[],
+	branch: string,
+	worktreePath: string,
+	_worktreesDirReal: string,
+): WorktreeEntry[] {
+	const stale: WorktreeEntry[] = [];
+	for (const entry of entries) {
+		if (entry.path !== worktreePath) continue;
+		// Same managed path. Stale if prunable, detached, branch null, or wrong branch.
+		if (entry.prunable || entry.detached || entry.branch === null || entry.branch !== branch) {
+			stale.push(entry);
+		}
+	}
+	return stale;
 }

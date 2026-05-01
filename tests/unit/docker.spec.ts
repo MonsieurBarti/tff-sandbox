@@ -779,3 +779,89 @@ describe("exec semantics", () => {
 		}
 	});
 });
+
+describe("dispose semantics", () => {
+	let repo: { dir: string; cleanup: () => void };
+
+	beforeEach(async () => {
+		if (skipAll) return;
+		repo = await makeWorkRepo();
+	});
+
+	afterEach(() => {
+		repo?.cleanup();
+	});
+
+	// Poll-until-gone helper: `docker inspect` may transiently succeed during
+	// the daemon's "Removing" state immediately after `docker rm -f` returns.
+	// 5 retries × 100ms backoff covers the residual flakiness without false
+	// negatives.
+	async function expectContainerGone(name: string): Promise<void> {
+		for (let i = 0; i < 5; i++) {
+			const r = await execFileAsync("docker", ["inspect", name]).catch((e) => e);
+			if (r instanceof Error) return;
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+		throw new Error(`expectContainerGone: container ${name} still inspectable after 500ms`);
+	}
+
+	it("AC#26: dispose removes the container", async () => {
+		if (skipAll) return;
+		const sandbox = await docker().start({ worktreePath: repo.dir });
+		const name = sandbox.containerName;
+		await sandbox.dispose();
+		await expectContainerGone(name);
+	});
+
+	it("AC#27: dispose is idempotent", async () => {
+		if (skipAll) return;
+		const sandbox = await docker().start({ worktreePath: repo.dir });
+		await sandbox.dispose();
+		await expect(sandbox.dispose()).resolves.toBeUndefined();
+	});
+
+	it("AC#28: dispose swallows already-removed-by-external-actor", async () => {
+		if (skipAll) return;
+		const sandbox = await docker().start({ worktreePath: repo.dir });
+		await execFileAsync("docker", ["rm", "-f", sandbox.containerName]);
+		await expect(sandbox.dispose()).resolves.toBeUndefined();
+	});
+
+	it("AC#29: dispose removes the registered exit/SIGINT/SIGTERM listeners", async () => {
+		if (skipAll) return;
+		const before = {
+			exit: process.listenerCount("exit"),
+			sigint: process.listenerCount("SIGINT"),
+			sigterm: process.listenerCount("SIGTERM"),
+		};
+		const sandbox = await docker().start({ worktreePath: repo.dir });
+		await sandbox.dispose();
+		expect(process.listenerCount("exit")).toBe(before.exit);
+		expect(process.listenerCount("SIGINT")).toBe(before.sigint);
+		expect(process.listenerCount("SIGTERM")).toBe(before.sigterm);
+	});
+
+	it("AC#3a: await using disposes at scope exit", async () => {
+		if (skipAll) return;
+		let captured: string | null = null;
+		{
+			await using sandbox = await docker().start({ worktreePath: repo.dir });
+			captured = sandbox.containerName;
+		}
+		await expectContainerGone(captured ?? "");
+	});
+
+	it("AC#3b: throw inside await using block still disposes and propagates", async () => {
+		if (skipAll) return;
+		let captured: string | null = null;
+		const promise = (async (): Promise<void> => {
+			await using sandbox = await docker().start({ worktreePath: repo.dir });
+			captured = sandbox.containerName;
+			throw new Error("user-thrown");
+		})();
+		const err = await promise.catch((e) => e);
+		expect(err).toBeInstanceOf(Error);
+		expect(String(err.message)).toBe("user-thrown");
+		await expectContainerGone(captured ?? "");
+	});
+});

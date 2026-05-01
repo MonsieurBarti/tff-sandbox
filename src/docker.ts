@@ -394,8 +394,19 @@ export function docker(opts: DockerOptions = {}): SandboxProvider {
 					disposed = true;
 					try {
 						await execFileAsync("docker", ["rm", "-f", generatedName]);
-					} catch {
-						/* best-effort, T10 hardens */
+					} catch (err) {
+						const stderr = getStderr(err) ?? "";
+						if (/No such container|Cannot connect to the Docker daemon/i.test(stderr)) {
+							process.off("exit", onExit);
+							process.off("SIGINT", onSignal);
+							process.off("SIGTERM", onSignal);
+							return;
+						}
+						throw new SandboxError(
+							"DISPOSE_FAILED",
+							stderr.length > 0 ? stderr : getErrorMessage(err),
+							err,
+						);
 					}
 					process.off("exit", onExit);
 					process.off("SIGINT", onSignal);

@@ -6,6 +6,10 @@ export default defineConfig({
 		environment: "node",
 		include: ["tests/unit/**/*.spec.ts"],
 		exclude: ["node_modules", "dist"],
+		setupFiles: ["tests/setup.ts"],
+		poolOptions: {
+			threads: { singleThread: true },
+		},
 		coverage: {
 			provider: "v8",
 			reporter: ["text", "json", "html"],
